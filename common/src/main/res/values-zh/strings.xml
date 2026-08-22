@@ -747,6 +747,24 @@
   <string name="enable_conscrypt">启用Conscrypt</string>
   <string name="enable_conscrypt_desc">改进某些设备HTTPS、TLS和VPN的兼容性，但偶尔可能会导致播放问题或降低网络性能</string>
   <string name="network_settings">网络设置</string>
+  <string name="xray_proxy_title">内置代理 (Xray)</string>
+  <string name="xray_proxy_enable">启用内置代理</string>
+  <string name="xray_subscription_url">订阅地址</string>
+  <string name="xray_builtin_nodes">默认订阅自动更新（失败时用内置列表）</string>
+  <string name="xray_select_node">选择节点</string>
+  <string name="xray_no_node_selected">未选择</string>
+  <string name="xray_select_node_first">请先在下方选择节点</string>
+  <string name="xray_enter_subscription_first">请先填写订阅地址</string>
+  <string name="xray_loading_nodes">正在拉取订阅并测速，请稍候…</string>
+  <string name="xray_subscription_load_failed">订阅加载失败</string>
+  <string name="xray_no_supported_nodes">订阅中没有可用的节点</string>
+  <string name="xray_node_timeout">超时</string>
+  <string name="xray_node_selected">已选择：%s</string>
+  <string name="xray_detecting_nodes">正在自动检测最快代理节点，请稍候…</string>
+  <string name="xray_bootstrap_failed">未找到可用代理节点，将使用直连</string>
+  <string name="xray_phase1_result">节点连通检测：%1$d/%2$d 可达，测速中…</string>
+  <string name="xray_phase2_result">测速完成：%1$d 个节点可用，正在验证 YouTube…</string>
+  <string name="xray_phase3_checking">正在通过「%s」连接 YouTube…</string>
   <string name="comments_disabled">此视频已关闭评论</string>
   <string name="remove_video_to_watch_later">从稍后观看移除</string>
 </resources>

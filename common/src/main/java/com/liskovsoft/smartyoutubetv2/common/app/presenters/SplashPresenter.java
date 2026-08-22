@@ -26,7 +26,10 @@ import com.liskovsoft.smartyoutubetv2.common.misc.MediaServiceManager;
 import com.liskovsoft.smartyoutubetv2.common.misc.StreamReminderService;
 import com.liskovsoft.smartyoutubetv2.common.prefs.AccountsData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.GeneralData;
+import com.liskovsoft.smartyoutubetv2.common.prefs.AppPrefs;
 import com.liskovsoft.smartyoutubetv2.common.proxy.ProxyManager;
+import com.liskovsoft.smartyoutubetv2.common.proxy.xray.XrayBootstrap;
+import com.liskovsoft.smartyoutubetv2.common.proxy.xray.XrayManager;
 import com.liskovsoft.smartyoutubetv2.common.utils.IntentExtractor;
 import com.liskovsoft.smartyoutubetv2.common.utils.SimpleEditDialog;
 import com.liskovsoft.smartyoutubetv2.common.utils.Utils;
@@ -46,6 +49,23 @@ public class SplashPresenter extends BasePresenter<SplashView> {
     private String mBridgePackageName;
     private final Runnable mRunBackgroundTasks = this::runBackgroundTasks;
     private final Runnable mCheckForUpdates = this::checkForUpdates;
+    /** Max time the splash screen waits for the Xray node detection. */
+    private static final long XRAY_BOOTSTRAP_TIMEOUT_MS = 120_000;
+    private boolean mXrayBootstrapPending;
+    private boolean mStartupPaused;
+    private Intent mPendingIntent;
+    private final Runnable mXrayWatchdog = () -> {
+        mXrayBootstrapPending = false;
+        resumeStartupIfPaused();
+        proceedToMainView();
+    };
+
+    private void resumeStartupIfPaused() {
+        if (mStartupPaused) {
+            mStartupPaused = false;
+            continueStartup();
+        }
+    }
 
     private interface IntentProcessor {
         boolean process(Intent intent);
@@ -108,7 +128,24 @@ public class SplashPresenter extends BasePresenter<SplashView> {
         Utils.postDelayed(mCheckForUpdates, APP_INIT_DELAY_MS);
         Utils.updateRemoteControlService(getContext());
 
-        checkMasterPassword(() -> applyNewIntent(getView().getNewIntent()));
+        continueStartup();
+    }
+
+    /**
+     * While the Xray node detection runs, nothing else may start an activity:
+     * the splash is singleInstance, so any other activity (account picker,
+     * sign-in) would put it to background and the user would see the launcher.
+     */
+    private void continueStartup() {
+        if (mXrayBootstrapPending) {
+            mStartupPaused = true;
+            return;
+        }
+
+        checkMasterPassword(() -> {
+            mPendingIntent = getView().getNewIntent();
+            proceedToMainView();
+        });
 
         showAccountSelectionIfNeeded(); // should be placed after Intent chain
         checkAccountPassword();
@@ -169,12 +206,61 @@ public class SplashPresenter extends BasePresenter<SplashView> {
     }
 
     private void initProxy() {
-        if (getContext() != null) {
-            // Apply proxy config after global prefs but before starting networking.
+        if (getContext() == null) {
+            return;
+        }
+
+        // Manual web proxy takes precedence over the built-in Xray auto mode.
+        if (AppPrefs.instance(getContext()).isWebProxyEnabled()) {
             if (GeneralData.instance(getContext()).isProxyEnabled()) {
                 new ProxyManager(getContext()).configureSystemProxy();
             }
+            return;
         }
+
+        if (!XrayManager.isSupported()) {
+            return;
+        }
+
+        // Auto-detect the fastest node and route the app through it.
+        // The main view is held until detection finishes (or the watchdog fires).
+        mXrayBootstrapPending = true;
+        Utils.postDelayed(mXrayWatchdog, XRAY_BOOTSTRAP_TIMEOUT_MS);
+        XrayBootstrap.start(getContext(), new XrayBootstrap.Callback() {
+            @Override
+            public void onProgress(String message) {
+                if (getView() != null) {
+                    getView().updateStatus(message);
+                }
+            }
+
+            @Override
+            public void onDone(boolean proxyActive) {
+                Utils.removeCallbacks(mXrayWatchdog);
+                if (!proxyActive && getView() != null) {
+                    // Let the user read the failure message before entering the app.
+                    getView().updateStatus(getContext().getString(R.string.xray_bootstrap_failed));
+                    Utils.postDelayed(() -> {
+                        mXrayBootstrapPending = false;
+                        resumeStartupIfPaused();
+                        proceedToMainView();
+                    }, 2_000);
+                } else {
+                    mXrayBootstrapPending = false;
+                    resumeStartupIfPaused();
+                    proceedToMainView();
+                }
+            }
+        });
+    }
+
+    private void proceedToMainView() {
+        if (mXrayBootstrapPending || mPendingIntent == null) {
+            return;
+        }
+        Intent intent = mPendingIntent;
+        mPendingIntent = null;
+        applyNewIntent(intent);
     }
 
     private void enableHistoryIfNeeded() {

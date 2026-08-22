@@ -29,6 +29,8 @@ import com.liskovsoft.smartyoutubetv2.common.prefs.PlayerTweaksData;
 import com.liskovsoft.smartyoutubetv2.common.prefs.SearchData;
 import com.liskovsoft.smartyoutubetv2.common.proxy.ProxyManager;
 import com.liskovsoft.smartyoutubetv2.common.proxy.WebProxyDialog;
+import com.liskovsoft.smartyoutubetv2.common.proxy.xray.XrayManager;
+import com.liskovsoft.smartyoutubetv2.common.proxy.xray.XrayNodeSelector;
 import com.liskovsoft.smartyoutubetv2.common.utils.AppDialogUtil;
 import com.liskovsoft.smartyoutubetv2.common.utils.SimpleEditDialog;
 import com.liskovsoft.youtubeapi.service.internal.MediaServiceData;
@@ -641,6 +643,43 @@ public class GeneralSettingsPresenter extends BasePresenter<Void> {
         appendConscrypt(settingsPresenter, options);
 
         settingsPresenter.appendCheckedCategory(getContext().getString(R.string.network_settings), options);
+
+        appendXray(settingsPresenter);
+    }
+
+    private void appendXray(AppDialogPresenter settingsPresenter) {
+        if (!XrayManager.isSupported()) {
+            return;
+        }
+
+        AppPrefs prefs = AppPrefs.instance(getContext());
+
+        // No on/off toggle: Xray auto-detects the best node on every app start.
+        // These items are manual overrides only.
+        List<OptionItem> actions = new ArrayList<>();
+        String subUrl = prefs.getXraySubscriptionUrl();
+        actions.add(UiOptionItem.from(getContext().getString(R.string.xray_subscription_url),
+                subUrl.isEmpty() ? getContext().getString(R.string.xray_builtin_nodes) : subUrl,
+                option -> {
+                    // The settings dialog lives in a separate activity; close it first,
+                    // otherwise the edit dialog gets BadToken on the paused context.
+                    settingsPresenter.closeDialog();
+                    SimpleEditDialog.show(getContext(),
+                            getContext().getString(R.string.xray_subscription_url),
+                            prefs.getXraySubscriptionUrl(),
+                            newValue -> {
+                                prefs.setXraySubscriptionUrl(newValue);
+                                // Invalidate the old node: it may not exist in the new subscription.
+                                prefs.setXraySelectedNodeName("");
+                                prefs.setXraySelectedOutbound("");
+                                return true;
+                            });
+                }));
+        String nodeName = prefs.getXraySelectedNodeName();
+        actions.add(UiOptionItem.from(getContext().getString(R.string.xray_select_node),
+                nodeName.isEmpty() ? getContext().getString(R.string.xray_no_node_selected) : nodeName,
+                option -> XrayNodeSelector.show(getContext())));
+        settingsPresenter.appendStringsCategory(getContext().getString(R.string.xray_proxy_title), actions);
     }
 
     private void appendProxyManager(AppDialogPresenter settingsPresenter, List<OptionItem> options) {

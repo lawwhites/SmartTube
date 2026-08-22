@@ -332,6 +332,17 @@ public class ProxyManager {
         return false;
     }
 
+    /**
+     * Applies the given proxy in-memory only (nothing is persisted to prefs).
+     * Used by the Xray auto mode, which re-detects the node on every app start
+     * and must not touch the manual web proxy settings.
+     */
+    public boolean configureProxy(Proxy proxy) {
+        mProxy = proxy;
+        mEnabled = proxy != null && proxy.type() != Proxy.Type.DIRECT;
+        return configureSystemProxy();
+    }
+
     public boolean isProxySupported() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT;
     }

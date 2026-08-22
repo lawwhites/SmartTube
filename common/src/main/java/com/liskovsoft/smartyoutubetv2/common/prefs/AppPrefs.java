@@ -24,6 +24,10 @@ public class AppPrefs extends SharedPreferencesBase implements AccountChangeList
     private static final String VIEW_MANAGER_DATA = "view_manager_data";
     private static final String WEB_PROXY_URI = "web_proxy_uri";
     private static final String WEB_PROXY_ENABLED = "web_proxy_enabled";
+    private static final String XRAY_ENABLED = "xray_enabled";
+    private static final String XRAY_SUBSCRIPTION_URL = "xray_subscription_url";
+    private static final String XRAY_SELECTED_NODE_NAME = "xray_selected_node_name";
+    private static final String XRAY_SELECTED_OUTBOUND = "xray_selected_outbound";
     private static final String LAST_PROFILE_NAME = "last_profile_name";
     private String mBootResolution;
     private final WeakHashSet<ProfileChangeListener> mListeners = new WeakHashSet<>();
@@ -147,6 +151,39 @@ public class AppPrefs extends SharedPreferencesBase implements AccountChangeList
 
     public void setWebProxyEnabled(boolean enabled) {
         putBoolean(WEB_PROXY_ENABLED, enabled);
+    }
+
+    public boolean isXrayEnabled() {
+        return getBoolean(XRAY_ENABLED, false);
+    }
+
+    public void setXrayEnabled(boolean enabled) {
+        putBoolean(XRAY_ENABLED, enabled);
+    }
+
+    public String getXraySubscriptionUrl() {
+        return getString(XRAY_SUBSCRIPTION_URL, "");
+    }
+
+    public void setXraySubscriptionUrl(String url) {
+        putString(XRAY_SUBSCRIPTION_URL, url);
+    }
+
+    public String getXraySelectedNodeName() {
+        return getString(XRAY_SELECTED_NODE_NAME, "");
+    }
+
+    public void setXraySelectedNodeName(String name) {
+        putString(XRAY_SELECTED_NODE_NAME, name);
+    }
+
+    /** Xray outbound JSON of the currently selected node. */
+    public String getXraySelectedOutbound() {
+        return getString(XRAY_SELECTED_OUTBOUND, "");
+    }
+
+    public void setXraySelectedOutbound(String outboundJson) {
+        putString(XRAY_SELECTED_OUTBOUND, outboundJson);
     }
 
     private String getProfileName() {
