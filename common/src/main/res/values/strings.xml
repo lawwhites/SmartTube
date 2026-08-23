@@ -765,6 +765,7 @@
     <string name="xray_phase1_result">Connectivity check: %1$d/%2$d reachable, measuring speed…</string>
     <string name="xray_phase2_result">Speed test done: %1$d working, verifying YouTube…</string>
     <string name="xray_phase3_checking">Connecting to YouTube via \"%s\"…</string>
+    <string name="xray_checking_last_node">Verifying the last used server \"%s\"…</string>
     <string name="comments_disabled">Comments are disabled for this video</string>
     <plurals name="hours">
         <item quantity="one">%s hour</item>

@@ -47,9 +47,10 @@ Xray-core 以 **隐藏本地 SOCKS 代理** 模式运行（监听 `127.0.0.1:108
 
 启动时无需用户操作，由 `XrayBootstrap` 自动完成：
 
+0. **快速通道**：若上次启动已选定节点（`xraySelectedOutbound` 缓存非空），跳过 Phase 1/2，先用临时 core 对该节点 `measureOutboundDelay` 实测纯 RTT（目标 `youtube.com/generate_204`）；可达且 ≤ 500ms 即起完整 core 直接使用（约 1~2s），失败或超时则回退完整流程（覆盖节点 uuid/端口轮换）
 1. Phase 1：TCP ping 全部节点（内置 asset 或自定义订阅，20 并发，3s 超时）
-2. Phase 2：对 ping 最快的前 60 个节点用临时 core 实测真实延迟（12 并发），实测后按真实延迟重排序
-3. Phase 3：实测延迟最小的节点启动完整 core（本地 SOCKS 10808），OkHttp 经代理验证 `https://www.youtube.com/generate_204`，失败则尝试后续节点（最多 3 个）
+2. Phase 2：对 ping 最快的前 60 个节点用临时 core 实测真实延迟（12 并发，测速目标即 `youtube.com/generate_204`，实测结果同时是 YouTube 可达性验证）；按上次实测延迟（`xray_node_delays` 缓存）排序优先测好节点，一旦有 3 个节点实测 ≤ 500ms 即取消剩余测量提前进入 Phase 3，整体 60s 封顶；实测节点按真实延迟排在候选列表前部
+3. Phase 3：候选列表头部节点启动完整 core（本地 SOCKS 10808），OkHttp 经代理验证 `https://www.youtube.com/generate_204`，失败则尝试后续节点（最多 3 个）
 4. 成功后应用代理并进入主界面
 
 `SplashPresenter.initProxy()` 启动检测，主界面入口（`applyNewIntent`）被挂起直到检测结束，看门狗 90s 超时强制放行；手动 web 代理优先于 Xray 自动模式。代理通过 `ProxyManager.configureProxy()` 以**纯内存方式**应用，不污染手动 web 代理的持久化配置。

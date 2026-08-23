@@ -15,10 +15,21 @@ import com.liskovsoft.smartyoutubetv2.common.proxy.PasswdInetSocketAddress;
 import com.liskovsoft.smartyoutubetv2.common.proxy.Proxy;
 import com.liskovsoft.smartyoutubetv2.common.proxy.ProxyManager;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -47,6 +58,13 @@ public class XrayBootstrap {
     private static final int REAL_TEST_TOP_N = 60;
     private static final int YOUTUBE_CHECK_ATTEMPTS = 3;
     private static final String YOUTUBE_TEST_URL = "https://www.youtube.com/generate_204";
+    /** Fast path: reuse the cached node only when its YouTube delay stays below this. */
+    private static final int FAST_PATH_MAX_DELAY_MS = 500;
+    /** Phase 2 exits early once this many nodes measure below MEASURE_EARLY_EXIT_DELAY_MS. */
+    private static final int MEASURE_EARLY_EXIT_COUNT = 3;
+    private static final int MEASURE_EARLY_EXIT_DELAY_MS = 500;
+    /** Overall cap for Phase 2; slower stragglers are cancelled. */
+    private static final long MEASURE_TOTAL_TIMEOUT_MS = 60_000;
 
     public interface Callback {
         /** Progress update for the splash screen. Runs on the main thread. */
@@ -84,6 +102,15 @@ public class XrayBootstrap {
     /** Returns the node that passed the YouTube check, or null. Blocking. */
     private static ProxyNode detectBestNode(Context context, Callback callback) {
         try {
+            // Fast path: re-verify the previously selected node against YouTube
+            // and skip the full detection when it is still healthy. Falls back
+            // to the full pipeline on failure or high delay (node credentials
+            // may have rotated since the node was cached).
+            ProxyNode cached = tryCachedNode(context, callback);
+            if (cached != null) {
+                return cached;
+            }
+
             reportProgress(context, callback, R.string.xray_detecting_nodes);
             // Remote subscription first (node credentials may rotate), bundled list as fallback.
             String yaml = XrayNodeSelector.loadSubscription(context);
@@ -110,14 +137,13 @@ public class XrayBootstrap {
                 return null;
             }
             XrayManager.instance(context).ensureEnv();
-            measureRealDelay(top);
-            // Re-order by the measured real delay: Phase 3 starts from the
-            // node with the lowest latency, not the lowest TCP ping.
-            sortByDelay(top);
-            Log.d(TAG, "Phase 2 done, working: %d/%d", countReachable(top), top.size());
-            reportProgress(context, callback, R.string.xray_phase2_result, countReachable(top));
+            int working = measureRealDelay(context, top);
+            Log.d(TAG, "Phase 2 done, working: %d/%d", working, top.size());
+            reportProgress(context, callback, R.string.xray_phase2_result, working);
 
-            // Phase 3: YouTube check, best first
+            // Phase 3: YouTube check through the full core, best first.
+            // measureRealDelay already ordered the list: measured nodes by real
+            // delay first, then unmeasured ones by TCP ping.
             XrayManager manager = XrayManager.instance(context);
             int attempts = 0;
             for (ProxyNode node : top) {
@@ -126,13 +152,50 @@ public class XrayBootstrap {
                 }
                 attempts++;
                 reportProgress(context, callback, R.string.xray_phase3_checking, node.name);
-                if (checkYouTube(manager, node)) {
+                long delayMs = checkYouTube(manager, node);
+                if (delayMs > 0) {
                     Log.d(TAG, "Phase 3 passed with node: %s", node.name);
+                    node.delayMs = delayMs;
                     return node;
                 }
             }
         } catch (Exception e) {
             Log.e(TAG, "Node detection failed: %s", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Fast path: measure the cached node's real delay with a temporary core
+     * (pure RTT against YouTube, no full-core cold-start overhead) and start
+     * the full core with it when still healthy. Returns the node when
+     * reachable with delay &le; FAST_PATH_MAX_DELAY_MS, null otherwise.
+     */
+    private static ProxyNode tryCachedNode(Context context, Callback callback) {
+        AppPrefs prefs = AppPrefs.instance(context);
+        String outboundJson = prefs.getXraySelectedOutbound();
+        if (!prefs.isXrayEnabled() || outboundJson.isEmpty()) {
+            return null;
+        }
+        String name = prefs.getXraySelectedNodeName();
+        XrayManager manager = XrayManager.instance(context);
+        try {
+            ProxyNode node = new ProxyNode(name, "", "", 0, new JSONObject(outboundJson));
+            reportProgress(context, callback, R.string.xray_checking_last_node, name);
+            manager.ensureEnv();
+            long delayMs = XrayManager.measureNodeDelay(node);
+            if (delayMs > 0 && delayMs <= FAST_PATH_MAX_DELAY_MS) {
+                Log.d(TAG, "Fast path OK: %s (%d ms)", name, delayMs);
+                node.delayMs = delayMs;
+                manager.startSync(node.getOutboundJson());
+                waitForPort(10_000);
+                return node;
+            }
+            Log.d(TAG, "Fast path unusable (%d ms), running full detection", delayMs);
+            manager.stop();
+        } catch (Exception e) {
+            Log.e(TAG, "Fast path failed: %s", e.getMessage());
+            manager.stop();
         }
         return null;
     }
@@ -166,7 +229,8 @@ public class XrayBootstrap {
         return true;
     }
 
-    private static boolean checkYouTube(XrayManager manager, ProxyNode node) {
+    /** @return YouTube generate_204 delay through the node in ms, -1 on failure. */
+    private static long checkYouTube(XrayManager manager, ProxyNode node) {
         try {
             manager.stop();
             manager.startSync(node.getOutboundJson());
@@ -176,13 +240,15 @@ public class XrayBootstrap {
                     .proxy(new java.net.Proxy(java.net.Proxy.Type.SOCKS,
                             new InetSocketAddress(XrayManager.LOCAL_HOST, XrayManager.LOCAL_PORT)))
                     .build();
+            long start = System.currentTimeMillis();
             try (Response response = client.newCall(
                     new Request.Builder().url(YOUTUBE_TEST_URL).build()).execute()) {
-                return response.code() == 204 || response.code() == 200;
+                boolean ok = response.code() == 204 || response.code() == 200;
+                return ok ? System.currentTimeMillis() - start : -1;
             }
         } catch (Exception e) {
             Log.e(TAG, "YouTube check failed for %s: %s", node.name, e.getMessage());
-            return false;
+            return -1;
         }
     }
 
@@ -198,16 +264,119 @@ public class XrayBootstrap {
         pool.shutdown();
     }
 
-    private static void measureRealDelay(List<ProxyNode> nodes) throws Exception {
+    /**
+     * Measures the real forwarding delay of the given nodes, consuming results
+     * as they arrive and exiting early once MEASURE_EARLY_EXIT_COUNT nodes
+     * prove fast (the goal is a good-enough node, not the absolute fastest).
+     * Nodes are measured in last-known-delay order so likely-good nodes are
+     * tested first. On return the list is reordered: measured nodes by real
+     * delay (failures last), then unmeasured nodes by TCP ping.
+     * @return number of nodes that passed the real test
+     */
+    private static int measureRealDelay(Context context, List<ProxyNode> nodes) {
+        Map<String, Long> lastDelays = readLastDelays(context);
+        if (!lastDelays.isEmpty()) {
+            // Stable sort: nodes measured fast last time go first, unknown
+            // nodes keep their Phase 1 ping order.
+            nodes.sort((a, b) -> {
+                Long da = lastDelays.get(a.name);
+                Long db = lastDelays.get(b.name);
+                if (da == null && db == null) {
+                    return 0;
+                }
+                if (da == null) {
+                    return 1;
+                }
+                if (db == null) {
+                    return -1;
+                }
+                return Long.compare(da, db);
+            });
+        }
+
+        Set<ProxyNode> measured = Collections.newSetFromMap(new ConcurrentHashMap<>());
         ExecutorService pool = Executors.newFixedThreadPool(MEASURE_CONCURRENCY);
-        List<Future<?>> futures = new ArrayList<>();
+        ExecutorCompletionService<ProxyNode> completion = new ExecutorCompletionService<>(pool);
         for (ProxyNode node : nodes) {
-            futures.add(pool.submit(() -> node.delayMs = XrayManager.measureNodeDelay(node)));
+            completion.submit(() -> {
+                node.delayMs = XrayManager.measureNodeDelay(node);
+                return node;
+            });
         }
-        for (Future<?> future : futures) {
-            future.get(30, TimeUnit.SECONDS);
+
+        int received = 0;
+        int working = 0;
+        int fast = 0;
+        long deadline = System.currentTimeMillis() + MEASURE_TOTAL_TIMEOUT_MS;
+        try {
+            while (received < nodes.size()) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    break;
+                }
+                Future<ProxyNode> future = completion.poll(remaining, TimeUnit.MILLISECONDS);
+                if (future == null) {
+                    break; // overall timeout, cancel the rest
+                }
+                received++;
+                ProxyNode node;
+                try {
+                    node = future.get();
+                } catch (ExecutionException e) {
+                    continue;
+                }
+                measured.add(node);
+                if (node.delayMs > 0) {
+                    working++;
+                    lastDelays.put(node.name, node.delayMs);
+                    if (node.delayMs <= MEASURE_EARLY_EXIT_DELAY_MS && ++fast >= MEASURE_EARLY_EXIT_COUNT) {
+                        Log.d(TAG, "Phase 2 early exit: %d nodes under %d ms", fast, MEASURE_EARLY_EXIT_DELAY_MS);
+                        break;
+                    }
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pool.shutdownNow();
+            writeLastDelays(context, lastDelays);
         }
-        pool.shutdown();
+
+        List<ProxyNode> measuredList = new ArrayList<>();
+        List<ProxyNode> unmeasured = new ArrayList<>();
+        for (ProxyNode node : nodes) {
+            (measured.contains(node) ? measuredList : unmeasured).add(node);
+        }
+        sortByDelay(measuredList);
+        sortByDelay(unmeasured);
+        nodes.clear();
+        nodes.addAll(measuredList);
+        nodes.addAll(unmeasured);
+        return working;
+    }
+
+    /** Last measured real delays per node name, persisted across runs. */
+    private static Map<String, Long> readLastDelays(Context context) {
+        Map<String, Long> result = new HashMap<>();
+        String json = AppPrefs.instance(context).getXrayNodeDelays();
+        if (!json.isEmpty()) {
+            try {
+                JSONObject obj = new JSONObject(json);
+                for (Iterator<String> it = obj.keys(); it.hasNext(); ) {
+                    String name = it.next();
+                    result.put(name, obj.getLong(name));
+                }
+            } catch (JSONException e) {
+                Log.e(TAG, "Bad node delay cache: %s", e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private static void writeLastDelays(Context context, Map<String, Long> delays) {
+        if (!delays.isEmpty()) {
+            AppPrefs.instance(context).setXrayNodeDelays(new JSONObject(delays).toString());
+        }
     }
 
     private static long tcpPing(ProxyNode node) {

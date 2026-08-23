@@ -765,6 +765,7 @@
   <string name="xray_phase1_result">节点连通检测：%1$d/%2$d 可达，测速中…</string>
   <string name="xray_phase2_result">测速完成：%1$d 个节点可用，正在验证 YouTube…</string>
   <string name="xray_phase3_checking">正在通过「%s」连接 YouTube…</string>
+  <string name="xray_checking_last_node">正在验证上次使用的节点「%s」…</string>
   <string name="comments_disabled">此视频已关闭评论</string>
   <string name="remove_video_to_watch_later">从稍后观看移除</string>
 </resources>

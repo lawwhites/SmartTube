@@ -31,7 +31,10 @@ public class XrayManager {
     private static final String TAG = XrayManager.class.getSimpleName();
     public static final String LOCAL_HOST = "127.0.0.1";
     public static final int LOCAL_PORT = 10808;
-    private static final String DELAY_TEST_URL = "https://www.gstatic.com/generate_204";
+    // Measure against YouTube directly: the real-delay test doubles as the
+    // YouTube reachability check (a node fast on gstatic but blocking
+    // YouTube would pass a gstatic-only test).
+    private static final String DELAY_TEST_URL = "https://www.youtube.com/generate_204";
     private static XrayManager sInstance;
     private final Context mContext;
     private CoreController mController;

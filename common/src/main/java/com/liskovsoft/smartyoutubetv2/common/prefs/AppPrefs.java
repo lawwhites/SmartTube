@@ -28,6 +28,7 @@ public class AppPrefs extends SharedPreferencesBase implements AccountChangeList
     private static final String XRAY_SUBSCRIPTION_URL = "xray_subscription_url";
     private static final String XRAY_SELECTED_NODE_NAME = "xray_selected_node_name";
     private static final String XRAY_SELECTED_OUTBOUND = "xray_selected_outbound";
+    private static final String XRAY_NODE_DELAYS = "xray_node_delays";
     private static final String LAST_PROFILE_NAME = "last_profile_name";
     private String mBootResolution;
     private final WeakHashSet<ProfileChangeListener> mListeners = new WeakHashSet<>();
@@ -184,6 +185,15 @@ public class AppPrefs extends SharedPreferencesBase implements AccountChangeList
 
     public void setXraySelectedOutbound(String outboundJson) {
         putString(XRAY_SELECTED_OUTBOUND, outboundJson);
+    }
+
+    /** Last measured real delay per node (JSON object: name -> ms), used to order the next speed test. */
+    public String getXrayNodeDelays() {
+        return getString(XRAY_NODE_DELAYS, "");
+    }
+
+    public void setXrayNodeDelays(String delaysJson) {
+        putString(XRAY_NODE_DELAYS, delaysJson);
     }
 
     private String getProfileName() {
