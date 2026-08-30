@@ -36,6 +36,7 @@ Xray-core 以 **隐藏本地 SOCKS 代理** 模式运行（监听 `127.0.0.1:108
 - 新增依赖 `org.yaml:snakeyaml`（纯 Java，兼容 minSdk 17）。
 - 下载并解析 Clash YAML 的 `proxies` 列表。
 - 转换器把 vmess / vless / ss / trojan 节点映射为 Xray outbound JSON（含 ws/grpc/tcp、tls/reality streamSettings）。首版只支持这四种协议，不认识的节点跳过。
+- **域名节点 DoH 解析**（2026-08-25 新增，`DohResolver.java`）：订阅 server 为域名时，用配置内 `dns.proxy-server-nameserver` 的服务方 DoH（健康路由返回当前可用 IP，静态 IP 数天即被封）解析出候选 IP 池，每节点展开为每 IP 一个变体，Phase 1 后按名去重留最快。配置不含该段时回退到内置 huojian DoH 端点（`FALLBACK_DOH_SERVERS`，2026-08-29 起默认订阅即 huojian）。参考方法与实测数据见 `clash_doh_detection.md`。
 
 ### 流量接管
 

@@ -48,15 +48,32 @@ public class XrayNodeConnectionTest {
     @Test
     public void testBuiltinNodesConnectivity() throws Exception {
         Context ctx = InstrumentationRegistry.getTargetContext();
+        runConnectivityTest(ctx, readAsset(ctx, "xray_builtin_sub.yaml"));
+    }
+
+    /** Same three-phase check against the domain-based huojian subscription (DoH-resolved). */
+    @Test
+    public void testIpConfigNodesConnectivity() throws Exception {
+        Context ctx = InstrumentationRegistry.getTargetContext();
+        Context testCtx = InstrumentationRegistry.getInstrumentation().getContext();
+        runConnectivityTest(ctx, readAsset(testCtx, "clash_config.yaml"));
+    }
+
+    private static void runConnectivityTest(Context ctx, String yaml) throws Exception {
         StringBuilder report = new StringBuilder();
 
-        List<ProxyNode> nodes = ClashConfigParser.parse(readAsset(ctx, "xray_builtin_sub.yaml"));
-        assertFalse("no nodes parsed from builtin subscription", nodes.isEmpty());
+        List<ProxyNode> nodes = ClashConfigParser.parse(yaml);
+        assertFalse("no nodes parsed from subscription", nodes.isEmpty());
         report.append("Total nodes: ").append(nodes.size()).append('\n');
+
+        // Domain-based subscriptions: resolve via the config's DoH servers,
+        // one variant per candidate IP.
+        nodes = DohResolver.expandWithResolvedIps(yaml, nodes);
 
         // Phase 1: TCP ping all nodes
         pingAll(nodes, PING_CONCURRENCY, false);
         sortByDelay(nodes);
+        DohResolver.dedupeByName(nodes);
 
         int reachable = 0;
         for (ProxyNode node : nodes) {

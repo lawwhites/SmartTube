@@ -40,7 +40,7 @@ public class XrayNodeSelector {
     private static final String BUILTIN_SUB_ASSET = "xray_builtin_sub.yaml";
     /** Default subscription: keeps the node list fresh (uuid/port rotation); the bundled asset is the offline fallback. */
     private static final String DEFAULT_SUB_URL =
-            "https://www.c7sugkhg556.org/kgcclmdl/Cu6UnG5PJCIq2eOzmO5uWkwMBUORecr6qLJRKKtvUmA5FxAXT7wpkgkIV6bs1z2T?b2m4=1";
+            "https://666473.sub-cloudflare.com/ssp/huojian/link/3FAxvd1CNVjviVKE?clash=3&extend=1";
 
     /**
      * Loads the subscription YAML: user URL if set, otherwise the built-in
@@ -67,7 +67,9 @@ public class XrayNodeSelector {
 
         Flowable.just("")
                 .map(u -> loadSubscription(context))
-                .map(ClashConfigParser::parse)
+                // Resolve domain-based nodes via the config's DoH servers,
+                // one variant per candidate IP (see DohResolver).
+                .map(yaml -> DohResolver.expandWithResolvedIps(yaml, ClashConfigParser.parse(yaml)))
                 // Phase 1: fast TCP ping of every node.
                 .flatMap(nodes -> Flowable.fromIterable(nodes)
                         .flatMap(node -> Flowable.fromCallable(() -> {
@@ -76,7 +78,11 @@ public class XrayNodeSelector {
                                 }).subscribeOn(Schedulers.io()),
                                 PING_CONCURRENCY)
                         .toList()
-                        .map(XrayNodeSelector::sortByDelay)
+                        .map(list -> {
+                            sortByDelay(list);
+                            DohResolver.dedupeByName(list);
+                            return list;
+                        })
                         .toFlowable())
                 // Phase 2: real delay through the node, top survivors only
                 // (each measure spins a temporary core, way too slow for all).

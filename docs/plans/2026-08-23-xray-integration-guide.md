@@ -14,7 +14,9 @@ App 冷启动时在启动页自动执行检测，全程无需用户操作：
 
 成功后通过 JVM 系统属性把全 App 流量（OkHttp/HttpURLConnection）导入本地 SOCKS，并强制播放器数据源为 OkHttp（Cronet 不读 JVM 代理属性）；失败则直连进入主界面。启动期间 SplashActivity 保持前台并实时显示进度，看门狗 120s 强制放行。
 
-订阅加载顺序：用户自定义 URL → 内置默认订阅 URL → APK 内置 asset 兜底（`xray_builtin_sub.yaml`，113 节点：90 trojan + 23 vless）。
+订阅加载顺序：用户自定义 URL → 内置默认订阅 URL（2026-08-29 起为 huojian 订阅 `https://666473.sub-cloudflare.com/ssp/huojian/link/...?clash=3&extend=1`）→ APK 内置 asset 兜底（`xray_builtin_sub.yaml`，同步为 huojian 域名版配置，196 个 vmess 节点，server 为 `*.ddnskunlun.com` 域名）。
+
+域名版订阅在解析后增加 **DoH 解析步骤**（`DohResolver.java`）：从配置 `dns.proxy-server-nameserver` 提取服务方 DoH（健康路由，返回当前可用 IP）；**新版订阅导出已不含该段，此时回退到内置的 3 个 huojian DoH 端点（`FALLBACK_DOH_SERVERS`）**。RFC 8484 wire format 查询，每个域名聚合成候选 IP 池（2 轮 × 全部 DoH，8 线程并发，30s 封顶），每个域名节点展开为"每候选 IP 一个变体"；Phase 1 TCP ping 剪除死 IP 后按节点名去重只留最快变体。DoH 全部失败时节点原样保留（系统 DNS 兜底，实测系统 DNS 返回的 IP 不可用，故 DoH 是必需路径）。IP 版订阅（server 已是 IP）自动跳过该步骤。
 
 ## 改动全集
 

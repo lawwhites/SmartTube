@@ -30,4 +30,28 @@ public class ProxyNode {
     public String getOutboundJson() {
         return mOutbound.toString();
     }
+
+    /**
+     * Returns a copy of this node with the outbound server address replaced
+     * (used by DohResolver to expand a domain node into per-IP variants).
+     */
+    public ProxyNode withServer(String newServer) {
+        try {
+            JSONObject outbound = new JSONObject(getOutboundJson());
+            JSONObject settings = outbound.optJSONObject("settings");
+            if (settings != null) {
+                org.json.JSONArray vnext = settings.optJSONArray("vnext");
+                if (vnext != null && vnext.length() > 0) {
+                    vnext.getJSONObject(0).put("address", newServer);
+                }
+                org.json.JSONArray servers = settings.optJSONArray("servers");
+                if (servers != null && servers.length() > 0) {
+                    servers.getJSONObject(0).put("address", newServer);
+                }
+            }
+            return new ProxyNode(name, type, newServer, port, outbound);
+        } catch (org.json.JSONException e) {
+            return null;
+        }
+    }
 }

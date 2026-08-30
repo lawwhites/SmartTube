@@ -120,9 +120,16 @@ public class XrayBootstrap {
                 return null;
             }
 
+            // Domain-based subscriptions: resolve node domains to currently
+            // working IPs via the config's own DoH servers. Each domain
+            // expands into one variant per candidate IP; Phase 1 prunes the
+            // dead ones. No-op for IP-based subscriptions.
+            nodes = DohResolver.expandWithResolvedIps(yaml, nodes);
+
             // Phase 1: TCP ping all
             pingAll(nodes);
             sortByDelay(nodes);
+            DohResolver.dedupeByName(nodes);
             Log.d(TAG, "Phase 1 done, reachable: %d/%d", countReachable(nodes), nodes.size());
             reportProgress(context, callback, R.string.xray_phase1_result, countReachable(nodes), nodes.size());
 
