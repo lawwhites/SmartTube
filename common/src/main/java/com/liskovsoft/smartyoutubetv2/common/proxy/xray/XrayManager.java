@@ -10,22 +10,30 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.Socket;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import go.Seq;
-import libv2ray.CoreCallbackHandler;
-import libv2ray.CoreController;
-import libv2ray.Libv2ray;
+import com.v2ray.config.ConfigLoader;
+import com.v2ray.config.model.V2RayConfig;
+import com.v2ray.core.instance.V2RayInstance;
+
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
- * Manages the embedded Xray-core running as a hidden local SOCKS proxy
+ * Manages the embedded v2ray-java core running as a hidden local SOCKS proxy
  * on 127.0.0.1:10808 (no VpnService, no user-visible proxy server).
  *
  * App traffic is routed into it via the existing ProxyManager
  * (JVM socksProxyHost/socksProxyPort system properties).
+ *
+ * Historically this class drove the gomobile Xray-core (libv2ray aar); it now
+ * drives the pure-Java v2ray-java core with the same public surface.
  */
 public class XrayManager {
     private static final String TAG = XrayManager.class.getSimpleName();
@@ -35,10 +43,14 @@ public class XrayManager {
     // YouTube reachability check (a node fast on gstatic but blocking
     // YouTube would pass a gstatic-only test).
     private static final String DELAY_TEST_URL = "https://www.youtube.com/generate_204";
+    private static final long MEASURE_TIMEOUT_MS = 8_000;
+    private static final int MEASURE_PORT_BASE = 23200;
+    private static final int MEASURE_PORT_RANGE = 1000;
+    private static final AtomicInteger sMeasurePort = new AtomicInteger(MEASURE_PORT_BASE);
+
     private static XrayManager sInstance;
     private final Context mContext;
-    private CoreController mController;
-    private boolean mEnvInitialized;
+    private V2RayInstance mInstance;
 
     private XrayManager(Context context) {
         mContext = context.getApplicationContext();
@@ -52,16 +64,16 @@ public class XrayManager {
     }
 
     /**
-     * The official libv2ray aar is built with gomobile -androidapi 24,
-     * so the native library may fail to load on older devices.
+     * The pure-Java core has no native library constraint. AES/GCM support is
+     * reliable from API 21 up; gate there to stay conservative on legacy ROMs.
      */
     public static boolean isSupported() {
-        return Build.VERSION.SDK_INT >= 24;
+        return Build.VERSION.SDK_INT >= 21;
     }
 
     public boolean isRunning() {
         try {
-            return mController != null && mController.getIsRunning();
+            return mInstance != null && mInstance.isRunning();
         } catch (Exception e) {
             return false;
         }
@@ -77,7 +89,7 @@ public class XrayManager {
                 () -> {
                     try {
                         startSync(outboundJson);
-                        waitForPort(10_000);
+                        waitForPort(LOCAL_PORT, 10_000);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -95,84 +107,92 @@ public class XrayManager {
             return;
         }
         ensureEnv();
-        mController = Libv2ray.newCoreController(new CoreCallbackHandler() {
-            @Override
-            public long onEmitStatus(long l, String s) {
-                Log.d(TAG, "Xray status: %s", s);
-                return 0;
-            }
-
-            @Override
-            public long shutdown() {
-                return 0;
-            }
-
-            @Override
-            public long startup() {
-                Log.d(TAG, "Xray core started");
-                return 0;
-            }
-        });
-        // tunFd = 0: proxy-only mode, no VpnService.
-        mController.startLoop(buildConfig(outboundJson), 0);
+        V2RayConfig config = ConfigLoader.load(buildConfig(outboundJson));
+        V2RayInstance instance = ConfigLoader.createInstance(config);
+        instance.start();
+        mInstance = instance;
     }
 
     public synchronized void stop() {
-        if (mController != null) {
+        if (mInstance != null) {
             try {
-                mController.stopLoop();
+                mInstance.close();
             } catch (Exception e) {
                 Log.e(TAG, "Xray stop failed: %s", e.getMessage());
             }
-            mController = null;
+            mInstance = null;
         }
     }
 
     /**
-     * Measures the real delay of a single node by spinning up a temporary
-     * core instance inside the native lib (same approach as v2rayNG).
+     * Measures the real delay of a single node by spinning up a temporary core
+     * instance with a private SOCKS inbound, then timing a YouTube generate_204
+     * request through it.
      * @return RTT in ms, or a negative value if unreachable.
      */
     public static long measureNodeDelay(ProxyNode node) {
+        int port = nextMeasurePort();
+        V2RayInstance instance = null;
         try {
-            return Libv2ray.measureOutboundDelay(buildMeasureConfig(node.getOutbound()), DELAY_TEST_URL);
+            V2RayConfig config = ConfigLoader.load(buildMeasureConfig(node.getOutbound(), port));
+            instance = ConfigLoader.createInstance(config);
+            instance.start();
+            waitForPort(port, 5_000);
+
+            OkHttpClient client = new OkHttpClient.Builder()
+                    .proxy(new Proxy(Proxy.Type.SOCKS, new InetSocketAddress(LOCAL_HOST, port)))
+                    .connectTimeout(MEASURE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .readTimeout(MEASURE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .build();
+
+            long start = System.currentTimeMillis();
+            try (Response response = client.newCall(new Request.Builder().url(DELAY_TEST_URL).build()).execute()) {
+                if (response.code() != 204) {
+                    return -1;
+                }
+            }
+            return System.currentTimeMillis() - start;
         } catch (Exception e) {
             Log.e(TAG, "Delay measure failed for %s: %s", node.name, e.getMessage());
             return -1;
+        } finally {
+            if (instance != null) {
+                try {
+                    instance.close();
+                } catch (Exception ignored) {
+                    // ignore
+                }
+            }
         }
+    }
+
+    private static int nextMeasurePort() {
+        return sMeasurePort.updateAndGet(p -> p >= MEASURE_PORT_BASE + MEASURE_PORT_RANGE ? MEASURE_PORT_BASE : p + 1);
     }
 
     /**
-     * Initializes the gomobile context and the Xray environment once per process.
-     * Must run before ANY native call (startLoop, measureOutboundDelay).
+     * Kept for API compatibility with the gomobile era: the pure-Java core
+     * needs no environment setup. Everything is initialized per instance.
      */
     public synchronized void ensureEnv() {
-        if (mEnvInitialized) {
-            return;
-        }
-        Seq.setContext(mContext);
-        File assetDir = new File(mContext.getFilesDir(), "xray");
-        //noinspection ResultOfMethodCallIgnored
-        assetDir.mkdirs();
-        Libv2ray.initCoreEnv(assetDir.getAbsolutePath(), "");
-        mEnvInitialized = true;
+        // no-op
     }
 
-    private void waitForPort(long timeoutMs) {
+    private static void waitForPort(int port, long timeoutMs) {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(LOCAL_HOST, LOCAL_PORT), 1_000);
+                socket.connect(new InetSocketAddress(LOCAL_HOST, port), 1_000);
                 return;
             } catch (IOException e) {
                 try {
-                    Thread.sleep(300);
+                    Thread.sleep(200);
                 } catch (InterruptedException ignored) {
                     return;
                 }
             }
         }
-        Log.e(TAG, "Timed out waiting for Xray SOCKS port");
+        Log.e(TAG, "Timed out waiting for local SOCKS port %d", port);
     }
 
     /** Full config: local SOCKS inbound + selected outbound + direct fallback. */
@@ -199,10 +219,16 @@ public class XrayManager {
         return config.toString();
     }
 
-    /** Trimmed config for delay measurement: no inbound, node as the only way out. */
-    private static String buildMeasureConfig(JSONObject outbound) throws JSONException {
+    /** Measure config: private SOCKS inbound + node as the only way out. */
+    private static String buildMeasureConfig(JSONObject outbound, int socksPort) throws JSONException {
         JSONObject config = new JSONObject();
         config.put("log", new JSONObject().put("loglevel", "warning"));
+        config.put("inbounds", new JSONArray().put(new JSONObject()
+                .put("tag", "socks")
+                .put("listen", LOCAL_HOST)
+                .put("port", socksPort)
+                .put("protocol", "socks")
+                .put("settings", new JSONObject().put("auth", "noauth"))));
         config.put("outbounds", new JSONArray().put(outbound));
         return config.toString();
     }

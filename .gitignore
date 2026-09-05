@@ -72,3 +72,6 @@ fabric.properties
 hs_err_pid*.log
 keystore.properties
 smarttube-release.keystore
+
+# Local R8 override for v2ray-java (fetched by SharedModules/xraycore/build_v2ray.sh)
+gradle/r8-*.jar

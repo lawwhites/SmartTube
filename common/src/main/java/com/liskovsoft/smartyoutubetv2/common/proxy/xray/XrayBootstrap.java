@@ -58,11 +58,14 @@ public class XrayBootstrap {
     private static final int REAL_TEST_TOP_N = 60;
     private static final int YOUTUBE_CHECK_ATTEMPTS = 3;
     private static final String YOUTUBE_TEST_URL = "https://www.youtube.com/generate_204";
+    // NOTE: the pure-Java core's measureNodeDelay times a full HTTPS request
+    // (SOCKS + VMess handshake + TLS + HTTP), ~3-4x the pure RTT the gomobile
+    // measureOutboundDelay reported. Thresholds below are calibrated for that.
     /** Fast path: reuse the cached node only when its YouTube delay stays below this. */
-    private static final int FAST_PATH_MAX_DELAY_MS = 500;
+    private static final int FAST_PATH_MAX_DELAY_MS = 2_000;
     /** Phase 2 exits early once this many nodes measure below MEASURE_EARLY_EXIT_DELAY_MS. */
     private static final int MEASURE_EARLY_EXIT_COUNT = 3;
-    private static final int MEASURE_EARLY_EXIT_DELAY_MS = 500;
+    private static final int MEASURE_EARLY_EXIT_DELAY_MS = 1_500;
     /** Overall cap for Phase 2; slower stragglers are cancelled. */
     private static final long MEASURE_TOTAL_TIMEOUT_MS = 60_000;
 

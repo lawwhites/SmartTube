@@ -108,7 +108,11 @@ dependencies {
 
     implementation project(':slidableactivity') // https://github.com/r0adkll/Slidr
 
-    implementation project(':xraycore') // Xray-core gomobile bindings (unpacked aar)
+    implementation project(':xraycore') // Pure-Java v2ray core (fat jar, see build_v2ray.sh)
 
     implementation 'org.yaml:snakeyaml:1.33' // Clash subscription parsing
+
+    // Explicit: the slf4j->logcat binding (org.slf4j.impl) needs the API at
+    // compile time; the jar above embeds no slf4j (duplicates this one).
+    implementation 'org.slf4j:slf4j-api:1.7.25'
 }

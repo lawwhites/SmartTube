@@ -158,6 +158,132 @@ public class XrayNodeConnectionTest {
         assertTrue("YouTube unreachable through the best node", youtubeOk);
     }
 
+    /**
+     * Byte-level SOCKS5 probe against the embedded core: manual greeting,
+     * CONNECT, hex dump of the reply, then a JDK SSLSocket handshake exactly
+     * like OkHttp does it. Used to pinpoint the Android-only TLS parse failure.
+     */
+    @Test
+    public void testRawSocksProbe() throws Exception {
+        Context ctx = InstrumentationRegistry.getTargetContext();
+        Context testCtx = InstrumentationRegistry.getInstrumentation().getContext();
+
+        List<ProxyNode> nodes = ClashConfigParser.parse(readAsset(testCtx, "clash_config.yaml"));
+        nodes = DohResolver.expandWithResolvedIps(readAsset(testCtx, "clash_config.yaml"), nodes);
+        pingAll(nodes, PING_CONCURRENCY, false);
+        ProxyNode best = null;
+        for (ProxyNode node : nodes) {
+            if (node.delayMs > 0) {
+                best = node;
+                break;
+            }
+        }
+        assertTrue("no reachable node", best != null);
+        android.util.Log.i(TAG, "probe node: " + best.name);
+
+        int port = 23456;
+        String cfg = "{\"inbounds\":[{\"tag\":\"socks\",\"listen\":\"127.0.0.1\",\"port\":" + port
+                + ",\"protocol\":\"socks\",\"settings\":{\"auth\":\"noauth\"}}],\"outbounds\":["
+                + best.getOutboundJson() + "]}";
+        com.v2ray.core.instance.V2RayInstance inst = com.v2ray.config.ConfigLoader.createInstance(
+                com.v2ray.config.ConfigLoader.load(cfg));
+        inst.start();
+        try {
+            // wait for the socks port
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (true) {
+                try (Socket probe = new Socket()) {
+                    probe.connect(new InetSocketAddress("127.0.0.1", port), 1_000);
+                    break;
+                } catch (Exception e) {
+                    if (System.currentTimeMillis() > deadline) throw e;
+                    Thread.sleep(200);
+                }
+            }
+
+            // --- 1. manual byte-level handshake ---
+            Socket raw = new Socket();
+            raw.connect(new InetSocketAddress("127.0.0.1", port), 3_000);
+            raw.setSoTimeout(10_000);
+            java.io.OutputStream out = raw.getOutputStream();
+            java.io.InputStream in = raw.getInputStream();
+            out.write(new byte[]{5, 1, 0});
+            out.flush();
+            byte[] greeting = new byte[2];
+            readFully(in, greeting);
+            android.util.Log.i(TAG, "greeting reply: " + hex(greeting));
+
+            byte[] host = "www.youtube.com".getBytes("UTF-8");
+            ByteArrayOutputStream conn = new ByteArrayOutputStream();
+            conn.write(new byte[]{5, 1, 0, 3, (byte) host.length});
+            conn.write(host);
+            conn.write(443 >> 8);
+            conn.write(443 & 0xff);
+            out.write(conn.toByteArray());
+            out.flush();
+
+            byte[] replyHead = new byte[4];
+            readFully(in, replyHead);
+            StringBuilder replyHex = new StringBuilder(hex(replyHead));
+            int atyp = replyHead[3] & 0xff;
+            if (atyp == 1) {
+                byte[] rest = new byte[6];
+                readFully(in, rest);
+                replyHex.append(' ').append(hex(rest));
+            } else if (atyp == 3) {
+                int len = in.read();
+                replyHex.append(' ').append(String.format("%02x", len));
+                byte[] rest = new byte[len + 2];
+                readFully(in, rest);
+                replyHex.append(' ').append(hex(rest));
+            } else if (atyp == 4) {
+                byte[] rest = new byte[18];
+                readFully(in, rest);
+                replyHex.append(' ').append(hex(rest));
+            }
+            android.util.Log.i(TAG, "connect reply: " + replyHex);
+            assertTrue("socks reply not success: " + replyHex, replyHead[1] == 0);
+
+            // --- 2. TLS over the same socket (what OkHttp does) ---
+            javax.net.ssl.SSLSocketFactory sslFactory =
+                    (javax.net.ssl.SSLSocketFactory) javax.net.ssl.SSLSocketFactory.getDefault();
+            javax.net.ssl.SSLSocket tls =
+                    (javax.net.ssl.SSLSocket) sslFactory.createSocket(raw, "www.youtube.com", 443, true);
+            tls.startHandshake();
+            android.util.Log.i(TAG, "TLS handshake OK: " + tls.getSession().getProtocol());
+            // --- 3. JDK socks path (exactly what OkHttp 3.12 does) ---
+            Socket jdk = new Socket(new java.net.Proxy(java.net.Proxy.Type.SOCKS,
+                    new InetSocketAddress("127.0.0.1", port)));
+            jdk.connect(InetSocketAddress.createUnresolved("www.youtube.com", 443), 8_000);
+            javax.net.ssl.SSLSocket jdkTls = (javax.net.ssl.SSLSocket) sslFactory
+                    .createSocket(jdk, "www.youtube.com", 443, true);
+            jdkTls.startHandshake();
+            android.util.Log.i(TAG, "JDK-proxy TLS handshake OK: " + jdkTls.getSession().getProtocol());
+            jdkTls.close();
+
+            tls.close();
+        } finally {
+            inst.close();
+        }
+    }
+
+    private static void readFully(InputStream in, byte[] buf) throws Exception {
+        int off = 0;
+        while (off < buf.length) {
+            int n = in.read(buf, off, buf.length - off);
+            if (n < 0) throw new IllegalStateException("EOF after " + off + " bytes");
+            off += n;
+        }
+    }
+
+    private static String hex(byte[] data) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : data) {
+            sb.append(String.format("%02x", b)).append(' ');
+        }
+        return sb.toString().trim();
+    }
+
     private static void pingAll(List<ProxyNode> nodes, int concurrency, boolean real) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(concurrency);
         List<Future<?>> futures = new ArrayList<>();

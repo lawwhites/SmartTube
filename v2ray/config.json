@@ -1,0 +1,78 @@
+{
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "port": 10808,
+      "listen": "127.0.0.1",
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth"
+      }
+    },
+    {
+      "tag": "http-in",
+      "port": 10809,
+      "listen": "127.0.0.1",
+      "protocol": "http",
+      "settings": {}
+    },
+    {
+      "tag": "vless-in",
+      "port": 10810,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "27848739-7e62-4138-9fd3-098a63964b6b",
+            "level": 0
+          }
+        ]
+      }
+    },
+    {
+      "tag": "trojan-in",
+      "port": 10811,
+      "listen": "127.0.0.1",
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "v2ray-java-password"
+          }
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "blocked",
+      "protocol": "blackhole",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "outboundTag": "blocked",
+        "domain": [
+          "domain:ads.example.com",
+          "keyword:tracker"
+        ],
+        "ip": [
+          "10.0.0.0/8"
+        ]
+      },
+      {
+        "outboundTag": "direct",
+        "port": "80,443"
+      }
+    ]
+  }
+}

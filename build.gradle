@@ -21,6 +21,11 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:7.4.2'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:' + kotlinVersion
+        // Newer R8: the AGP-bundled D8 (4.0.52) crashes with NPE on enum classes
+        // compiled by JDK 21+ ($values pattern) found in v2ray-java's bundled deps.
+        // Fetched from dl.google.com by SharedModules/xraycore/build_v2ray.sh
+        // (Gradle's JVM cannot reach dl.google.com from this network).
+        classpath files("$rootDir/gradle/r8-8.3.37.jar")
 
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files
