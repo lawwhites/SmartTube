@@ -40,6 +40,22 @@ SharedModules/xraycore/build_v2ray.sh
    - `org/slf4j/**`、`ch/qos/logback/**`(App 已有 slf4j-api 1.7.25，避免类冲突；v2ray-java 只用到 1.7 兼容的基础 Logger API)
 3. 若 `gradle/r8-8.3.37.jar` 不存在则从 dl.google.com 下载（见"构建链"一节）
 
+### fat jar 内容构成（剥离后）
+
+| 依赖 | 用途 | 未压缩体积 |
+|---|---|---|
+| netty | 网络引擎（事件循环/Channel) | ~8M |
+| bouncycastle | SHAKE128 掩码等加密原语 | ~8M |
+| jackson | 解析 v2ray JSON 配置 | ~4.9M |
+| v2ray-java 本体 | 协议栈与核心 | ~0.24M |
+
+剥离掉的部分：slf4j/logback（与 App 已有 slf4j-api 1.7.25 冲突）、byte-buddy
+(~8.4M,netty-all 的可选传递依赖，运行时不用）、`META-INF/native/**`(netty 的
+epoll/kqueue 原生库，Android 上走纯 NIO)、多版本条目与签名文件。
+
+release 构建里 R8 会进一步裁掉未引用类。最终 arm64 release APK 约 **33M**,
+比 Go AAR 版（46M）小约 13M。
+
 大文件均不入 git（fat jar、R8 jar),`.gitignore` 已配置。
 
 ## 对 v2ray-java 源码的互通性修复（重要）
