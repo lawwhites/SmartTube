@@ -30,7 +30,8 @@
         com.google.android.exoplayer2.testutil,
         com.google.android.exoplayer2.ext.okhttp,
         com.google.firebase.crashlytics,
-        com.google.firebase.iid"/>
+        com.google.firebase.iid,
+        com.quickjs"/>
 
     <uses-feature
         android:name="android.hardware.microphone"

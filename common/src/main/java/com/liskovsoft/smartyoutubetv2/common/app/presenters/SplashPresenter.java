@@ -237,6 +237,11 @@ public class SplashPresenter extends BasePresenter<SplashView> {
             @Override
             public void onDone(boolean proxyActive) {
                 Utils.removeCallbacks(mXrayWatchdog);
+                // Warm up the player engine (app info + full sig/nsig solve) now
+                // that the proxy is up: the early attempt in runBackgroundTasks
+                // usually fires while the bootstrap is still down and fails
+                // silently, leaving the expensive solve on the playback path.
+                YouTubeServiceManager.instance().refreshCacheIfNeeded();
                 if (!proxyActive && getView() != null) {
                     // Let the user read the failure message before entering the app.
                     getView().updateStatus(getContext().getString(R.string.xray_bootstrap_failed));

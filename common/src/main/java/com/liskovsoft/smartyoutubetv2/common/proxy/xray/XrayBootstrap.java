@@ -54,7 +54,7 @@ public class XrayBootstrap {
     private static final String TAG = XrayBootstrap.class.getSimpleName();
     private static final int PING_CONCURRENCY = 20;
     private static final int MEASURE_CONCURRENCY = 12;
-    private static final int PING_TIMEOUT_MS = 3_000;
+    private static final int PING_TIMEOUT_MS = 1_500;
     private static final int REAL_TEST_TOP_N = 60;
     private static final int YOUTUBE_CHECK_ATTEMPTS = 3;
     private static final String YOUTUBE_TEST_URL = "https://www.youtube.com/generate_204";
@@ -146,18 +146,23 @@ public class XrayBootstrap {
             if (top.isEmpty()) {
                 return null;
             }
-            XrayManager.instance(context).ensureEnv();
-            int working = measureRealDelay(context, top);
-            Log.d(TAG, "Phase 2 done, working: %d/%d", working, top.size());
-            reportProgress(context, callback, R.string.xray_phase2_result, working);
+            XrayManager manager = XrayManager.instance(context);
+            manager.ensureEnv();
+            // Phase 2 + 3 pipelined: every node that measures fast is verified
+            // with the full core right away; falls back to the plain best-first
+            // sweep when no inline attempt passed.
+            Set<ProxyNode> phase3Tried = Collections.newSetFromMap(new ConcurrentHashMap<>());
+            ProxyNode winner = measureRealDelay(context, top, manager, callback, phase3Tried);
+            if (winner != null) {
+                return winner;
+            }
 
             // Phase 3: YouTube check through the full core, best first.
             // measureRealDelay already ordered the list: measured nodes by real
             // delay first, then unmeasured ones by TCP ping.
-            XrayManager manager = XrayManager.instance(context);
-            int attempts = 0;
+            int attempts = phase3Tried.size();
             for (ProxyNode node : top) {
-                if (node.delayMs <= 0 || attempts >= YOUTUBE_CHECK_ATTEMPTS) {
+                if (node.delayMs <= 0 || phase3Tried.contains(node) || attempts >= YOUTUBE_CHECK_ATTEMPTS) {
                     continue;
                 }
                 attempts++;
@@ -281,9 +286,19 @@ public class XrayBootstrap {
      * Nodes are measured in last-known-delay order so likely-good nodes are
      * tested first. On return the list is reordered: measured nodes by real
      * delay (failures last), then unmeasured nodes by TCP ping.
-     * @return number of nodes that passed the real test
+     * Measures the real forwarding delay of the given nodes, consuming results
+     * as they arrive. A node that proves fast enough is verified with the full
+     * core inline (Phase 3 pipelining) and returned immediately when it passes;
+     * inline-tried nodes are collected in {@code phase3Tried} so the fallback
+     * sweep does not retry them. Exits early once MEASURE_EARLY_EXIT_COUNT
+     * nodes prove fast (the goal is a good-enough node, not the absolute
+     * fastest). Nodes are measured in last-known-delay order so likely-good
+     * nodes are tested first. On return the list is reordered: measured nodes
+     * by real delay (failures last), then unmeasured nodes by TCP ping.
+     * @return the node that passed the inline YouTube check, or null
      */
-    private static int measureRealDelay(Context context, List<ProxyNode> nodes) {
+    private static ProxyNode measureRealDelay(Context context, List<ProxyNode> nodes, XrayManager manager,
+                                              Callback callback, Set<ProxyNode> phase3Tried) {
         Map<String, Long> lastDelays = readLastDelays(context);
         if (!lastDelays.isEmpty()) {
             // Stable sort: nodes measured fast last time go first, unknown
@@ -339,9 +354,23 @@ public class XrayBootstrap {
                 if (node.delayMs > 0) {
                     working++;
                     lastDelays.put(node.name, node.delayMs);
-                    if (node.delayMs <= MEASURE_EARLY_EXIT_DELAY_MS && ++fast >= MEASURE_EARLY_EXIT_COUNT) {
-                        Log.d(TAG, "Phase 2 early exit: %d nodes under %d ms", fast, MEASURE_EARLY_EXIT_DELAY_MS);
-                        break;
+                    if (node.delayMs <= MEASURE_EARLY_EXIT_DELAY_MS) {
+                        // Phase 3 pipelined: verify with the full core right
+                        // away. It binds its own port, so the in-flight temp
+                        // measurements are unaffected.
+                        if (phase3Tried.size() < YOUTUBE_CHECK_ATTEMPTS && phase3Tried.add(node)) {
+                            reportProgress(context, callback, R.string.xray_phase3_checking, node.name);
+                            long checked = checkYouTube(manager, node);
+                            if (checked > 0) {
+                                Log.d(TAG, "Phase 3 passed with node: %s", node.name);
+                                node.delayMs = checked;
+                                return node; // finally shuts the pool down
+                            }
+                        }
+                        if (++fast >= MEASURE_EARLY_EXIT_COUNT) {
+                            Log.d(TAG, "Phase 2 early exit: %d nodes under %d ms", fast, MEASURE_EARLY_EXIT_DELAY_MS);
+                            break;
+                        }
                     }
                 }
             }
@@ -351,6 +380,9 @@ public class XrayBootstrap {
             pool.shutdownNow();
             writeLastDelays(context, lastDelays);
         }
+
+        Log.d(TAG, "Phase 2 done, working: %d/%d", working, nodes.size());
+        reportProgress(context, callback, R.string.xray_phase2_result, working);
 
         List<ProxyNode> measuredList = new ArrayList<>();
         List<ProxyNode> unmeasured = new ArrayList<>();
@@ -362,7 +394,7 @@ public class XrayBootstrap {
         nodes.clear();
         nodes.addAll(measuredList);
         nodes.addAll(unmeasured);
-        return working;
+        return null;
     }
 
     /** Last measured real delays per node name, persisted across runs. */

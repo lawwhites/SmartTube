@@ -35,4 +35,6 @@
 -dontwarn retrofit2.**
 -dontwarn org.slf4j.**
 
+-keep class com.quickjs.** { *; }
+
 # End Enable minification
